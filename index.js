@@ -9,28 +9,20 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = twilio(accountSid, authToken);
 
-app.post('/child-call-status', async (req, res) => {
-  const { CallSid, CallStatus } = req.body;
+// Custom tool endpoint - VAPI llama aqui antes de transferir
+app.post('/transfer', async (req, res) => {
+  const { callSid, destination } = req.body;
 
-  console.log(`Child call ${CallSid} status: ${CallStatus}`);
+  console.log(`Transfer request - CallSid: ${callSid}, Destination: ${destination}`);
 
-  if (CallStatus === 'in-progress') {
-    try {
-      await client.calls(CallSid).recordings.create({
-        recordingChannels: 'dual'
-      });
-      console.log(`Recording started for ${CallSid}`);
-    } catch (err) {
-      console.error('Error starting recording:', err.message);
-    }
-  }
-
-  res.sendStatus(200);
-});
-
-app.get('/', (req, res) => {
-  res.send('OK');
-});
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+  try {
+    // Iniciar el transfer via Twilio con statusCallback al child call
+    await client.calls(callSid).update({
+      twiml: `<Response>
+        <Dial callerId="${req.body.callerId || ''}" 
+              action="/transfer-complete"
+              record="record-from-answer-dual"
+              recordingStatusCallback="https://activate-call-recording-twilio.onrender.com/recording-complete"
+              recordingStatusCallbackMethod="POST">
+          <Number statusCallback="https://activate-call-recording-twilio.onrender.com/child-status"
+                  statusCallb
