@@ -20,7 +20,11 @@ async function waitAndRecord(parentCallSid) {
 
       if (active) {
         console.log('Child found: ' + active.sid + ' status: ' + active.status);
-        await client.calls(active.sid).recordings.create({ recordingChannels: 'dual' });
+        await client.calls(active.sid).recordings.create({
+          recordingChannels: 'dual',
+          recordingStatusCallback: 'https://activate-call-recording-twilio.onrender.com/recording-complete',
+          recordingStatusCallbackMethod: 'POST'
+        });
         console.log('Recording started for ' + active.sid);
         return;
       } else {
