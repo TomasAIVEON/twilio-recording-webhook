@@ -10,6 +10,30 @@ const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const client = twilio(accountSid, authToken);
 
+async function waitAndRecord(parentCallSid) {
+  await new Promise(r => setTimeout(r, 4000));
+
+  for (let i = 0; i < 10; i++) {
+    try {
+      const calls = await client.calls.list({ parentCallSid: parentCallSid, limit: 5 });
+      const active = calls.find(c => c.status === 'in-progress');
+
+      if (active) {
+        console.log('Child found: ' + active.sid + ' status: ' + active.status);
+        await client.calls(active.sid).recordings.create({ recordingChannels: 'dual' });
+        console.log('Recording started for ' + active.sid);
+        return;
+      } else {
+        console.log('Attempt ' + (i+1) + ': no active child yet, calls found: ' + calls.length);
+      }
+    } catch (err) {
+      console.error('Polling error: ' + err.message);
+    }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+  console.log('Could not find active child call after 10 attempts');
+}
+
 app.post('/transfer', async (req, res) => {
   const message = req.body.message;
   const callSid = message.call.transport.callSid;
@@ -18,7 +42,6 @@ app.post('/transfer', async (req, res) => {
   const toolCallId = message.toolCallList[0].id;
 
   console.log('CallSid: ' + callSid + ', Destination: ' + destination);
-  console.log('ControlUrl: ' + controlUrl);
 
   res.json({
     results: [{ toolCallId: toolCallId, result: 'Transferring now' }]
@@ -49,16 +72,11 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    console.log('Transfer command sent for ' + callSid);
+    waitAndRecord(callSid);
+
   } catch (err) {
     console.error('Error: ' + err.message);
   }
-});
-
-app.post('/transfer-complete', (req, res) => {
-  console.log('Transfer complete: ' + JSON.stringify(req.body));
-  res.type('text/xml');
-  res.send('<Response><Hangup/></Response>');
 });
 
 app.post('/recording-complete', (req, res) => {
