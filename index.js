@@ -1,5 +1,6 @@
 const express = require('express');
 const twilio = require('twilio');
+const https = require('https');
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -12,19 +13,43 @@ const client = twilio(accountSid, authToken);
 app.post('/transfer', async (req, res) => {
   const message = req.body.message;
   const callSid = message.call.transport.callSid;
+  const controlUrl = message.call.monitor.controlUrl;
   const destination = message.toolCallList[0].function.arguments.destination;
+  const toolCallId = message.toolCallList[0].id;
 
   console.log('CallSid: ' + callSid + ', Destination: ' + destination);
+  console.log('ControlUrl: ' + controlUrl);
 
-  res.json({ result: 'Transferring now' });
+  res.json({
+    results: [{ toolCallId: toolCallId, result: 'Transferring now' }]
+  });
 
   try {
-    const recordingCallback = 'https://activate-call-recording-twilio.onrender.com/recording-complete';
-    const childCallback = 'https://activate-call-recording-twilio.onrender.com/child-status';
-    const twiml = '<Response><Dial action="https://activate-call-recording-twilio.onrender.com/transfer-complete" record="record-from-answer-dual" recordingStatusCallback="' + recordingCallback + '" recordingStatusCallbackMethod="POST"><Number statusCallback="' + childCallback + '" statusCallbackEvent="initiated ringing in-progress completed" statusCallbackMethod="POST">' + destination + '</Number></Dial></Response>';
+    const body = JSON.stringify({
+      type: 'transfer',
+      destination: { type: 'number', number: destination },
+      content: 'Dame un momento, te comunico con un asesor.'
+    });
 
-    await client.calls(callSid).update({ twiml: twiml });
-    console.log('Transfer executed for ' + callSid);
+    const url = new URL(controlUrl);
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    };
+
+    const request = https.request(options, (response) => {
+      console.log('Control response: ' + response.statusCode);
+    });
+    request.on('error', (e) => console.error('Control error: ' + e.message));
+    request.write(body);
+    request.end();
+
+    console.log('Transfer command sent for ' + callSid);
   } catch (err) {
     console.error('Error: ' + err.message);
   }
