@@ -11,24 +11,61 @@ const authToken = process.env.TWILIO_AUTH_TOKEN;
 const deepgramKey = process.env.DEEPGRAM_API_KEY;
 const client = twilio(accountSid, authToken);
 
-async function transcribeRecording(recordingSid, recordingUrl) {
-  console.log('Transcribing: ' + recordingSid);
-
-  const audioUrl = recordingUrl + '.wav';
-  const body = JSON.stringify({ url: audioUrl });
-
-  const options = {
-    hostname: 'api.deepgram.com',
-    path: '/v1/listen?language=es&punctuate=true&diarize=true&multichannel=true',
-    method: 'POST',
-    headers: {
-      'Authorization': 'Token ' + deepgramKey,
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    }
-  };
+async function downloadAudio(recordingUrl) {
+  const url = new URL(recordingUrl + '.wav');
+  const auth = Buffer.from(accountSid + ':' + authToken).toString('base64');
 
   return new Promise((resolve, reject) => {
+    const options = {
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'GET',
+      headers: { 'Authorization': 'Basic ' + auth }
+    };
+
+    const req = https.request(options, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        const redirectUrl = new URL(res.headers.location);
+        const redirectOptions = {
+          hostname: redirectUrl.hostname,
+          path: redirectUrl.pathname + (redirectUrl.search || ''),
+          method: 'GET'
+        };
+        const req2 = https.request(redirectOptions, (res2) => {
+          const chunks = [];
+          res2.on('data', chunk => chunks.push(chunk));
+          res2.on('end', () => resolve(Buffer.concat(chunks)));
+        });
+        req2.on('error', reject);
+        req2.end();
+      } else {
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      }
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function transcribeRecording(recordingSid, recordingUrl) {
+  console.log('Downloading audio: ' + recordingSid);
+  const audioBuffer = await downloadAudio(recordingUrl);
+  console.log('Audio downloaded, size: ' + audioBuffer.length + ' bytes');
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.deepgram.com',
+      path: '/v1/listen?language=es&punctuate=true&diarize=true',
+      method: 'POST',
+      headers: {
+        'Authorization': 'Token ' + deepgramKey,
+        'Content-Type': 'audio/wav',
+        'Content-Length': audioBuffer.length
+      }
+    };
+
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -44,7 +81,7 @@ async function transcribeRecording(recordingSid, recordingUrl) {
       });
     });
     req.on('error', reject);
-    req.write(body);
+    req.write(audioBuffer);
     req.end();
   });
 }
