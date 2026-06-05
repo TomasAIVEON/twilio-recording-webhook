@@ -8,7 +8,46 @@ app.use(express.json());
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
+const deepgramKey = process.env.DEEPGRAM_API_KEY;
 const client = twilio(accountSid, authToken);
+
+async function transcribeRecording(recordingSid, recordingUrl) {
+  console.log('Transcribing: ' + recordingSid);
+
+  const audioUrl = recordingUrl + '.wav';
+  const body = JSON.stringify({ url: audioUrl });
+
+  const options = {
+    hostname: 'api.deepgram.com',
+    path: '/v1/listen?language=es&punctuate=true&diarize=true&multichannel=true',
+    method: 'POST',
+    headers: {
+      'Authorization': 'Token ' + deepgramKey,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const result = JSON.parse(data);
+          const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
+          console.log('TRANSCRIPT: ' + transcript);
+          resolve(transcript);
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
 
 async function waitAndRecord(parentCallSid) {
   await new Promise(r => setTimeout(r, 4000));
@@ -83,12 +122,18 @@ app.post('/transfer', async (req, res) => {
   }
 });
 
-app.post('/recording-complete', (req, res) => {
+app.post('/recording-complete', async (req, res) => {
   const sid = req.body.RecordingSid;
   const url = req.body.RecordingUrl;
   const duration = req.body.RecordingDuration;
-  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, URL: ' + url);
+  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's');
   res.sendStatus(200);
+
+  try {
+    await transcribeRecording(sid, url);
+  } catch (err) {
+    console.error('Transcription error: ' + err.message);
+  }
 });
 
 app.post('/child-status', (req, res) => {
