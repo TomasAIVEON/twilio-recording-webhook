@@ -16,23 +16,24 @@ app.post('/transfer', async (req, res) => {
 
   console.log('CallSid: ' + callSid + ', Destination: ' + destination);
 
+  res.json({ result: 'Transferring now' });
+
   try {
     const recordingCallback = 'https://activate-call-recording-twilio.onrender.com/recording-complete';
     const childCallback = 'https://activate-call-recording-twilio.onrender.com/child-status';
     const twiml = '<Response><Dial action="https://activate-call-recording-twilio.onrender.com/transfer-complete" record="record-from-answer-dual" recordingStatusCallback="' + recordingCallback + '" recordingStatusCallbackMethod="POST"><Number statusCallback="' + childCallback + '" statusCallbackEvent="initiated ringing in-progress completed" statusCallbackMethod="POST">' + destination + '</Number></Dial></Response>';
 
     await client.calls(callSid).update({ twiml: twiml });
-
-    res.json({ result: 'Transfer initiated with recording' });
+    console.log('Transfer executed for ' + callSid);
   } catch (err) {
     console.error('Error: ' + err.message);
-    res.json({ result: 'Error: ' + err.message });
   }
 });
 
 app.post('/transfer-complete', (req, res) => {
   console.log('Transfer complete: ' + JSON.stringify(req.body));
-  res.sendStatus(200);
+  res.type('text/xml');
+  res.send('<Response><Hangup/></Response>');
 });
 
 app.post('/recording-complete', (req, res) => {
