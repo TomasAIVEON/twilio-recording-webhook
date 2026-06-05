@@ -57,7 +57,7 @@ async function transcribeRecording(recordingSid, recordingUrl) {
   return new Promise((resolve, reject) => {
     const options = {
       hostname: 'api.deepgram.com',
-      path: '/v1/listen?language=es&punctuate=true&diarize=true',
+      path: '/v1/listen?language=es&punctuate=true&diarize=true&model=nova-3',
       method: 'POST',
       headers: {
         'Authorization': 'Token ' + deepgramKey,
