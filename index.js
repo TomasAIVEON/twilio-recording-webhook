@@ -9,8 +9,16 @@ app.use(express.json());
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const deepgramKey = process.env.DEEPGRAM_API_KEY;
-const makeWebhook = 'https://hook.us2.make.com/n27oscm6jtz4ozn8p3nrfjpmbwnnkgtp';
 const client = twilio(accountSid, authToken);
+
+// ================================================
+// AGREGAR NUEVAS EMPRESAS AQUI
+const CLIENT_CONFIG = {
+  indomo: 'https://hook.us2.make.com/n27oscm6jtz4ozn8p3nrfjpmbwnnkgtp',
+  // empresa2: 'https://hook.us2.make.com/XXXX',
+  // empresa3: 'https://hook.us2.make.com/XXXX',
+};
+// ================================================
 
 const activeCalls = {};
 
@@ -52,7 +60,7 @@ async function downloadAudio(recordingUrl) {
   });
 }
 
-async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber) {
+async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber, empresa) {
   console.log('Downloading audio: ' + recordingSid);
   const audioBuffer = await downloadAudio(recordingUrl);
   console.log('Audio downloaded, size: ' + audioBuffer.length + ' bytes');
@@ -77,7 +85,7 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
           const result = JSON.parse(data);
           const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
           console.log('TRANSCRIPT: ' + transcript);
-          sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber);
+          sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa);
           resolve(transcript);
         } catch (e) {
           reject(e);
@@ -90,16 +98,26 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
   });
 }
 
-function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber) {
+function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa) {
+  const webhookUrl = CLIENT_CONFIG[empresa.toLowerCase()];
+
+  if (!webhookUrl) {
+    console.error('No webhook found for empresa: ' + empresa);
+    return;
+  }
+
+  console.log('Sending to webhook for empresa: ' + empresa);
+
   const body = JSON.stringify({
     parentCallSid: parentCallSid,
     childCallSid: childCallSid,
     customerNumber: customerNumber,
     recordingSid: recordingSid,
-    transcript: transcript
+    transcript: transcript,
+    empresa: empresa
   });
 
-  const url = new URL(makeWebhook);
+  const url = new URL(webhookUrl);
   const options = {
     hostname: url.hostname,
     path: url.pathname,
@@ -118,7 +136,7 @@ function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, custo
   req.end();
 }
 
-async function waitAndRecord(parentCallSid, customerNumber) {
+async function waitAndRecord(parentCallSid, customerNumber, empresa) {
   await new Promise(r => setTimeout(r, 4000));
 
   for (let i = 0; i < 10; i++) {
@@ -128,7 +146,7 @@ async function waitAndRecord(parentCallSid, customerNumber) {
 
       if (active) {
         console.log('Child found: ' + active.sid + ' status: ' + active.status);
-        activeCalls[active.sid] = { parentCallSid, customerNumber };
+        activeCalls[active.sid] = { parentCallSid, customerNumber, empresa };
         await client.calls(active.sid).recordings.create({
           recordingChannels: 'dual',
           recordingStatusCallback: 'https://activate-call-recording-twilio.onrender.com/recording-complete',
@@ -154,8 +172,9 @@ app.post('/transfer', async (req, res) => {
   const destination = message.toolCallList[0].function.arguments.destination;
   const toolCallId = message.toolCallList[0].id;
   const customerNumber = message.call.customer.number;
+  const empresa = message.toolCallList[0].function.arguments.empresa || 'indomo';
 
-  console.log('ParentCallSid: ' + parentCallSid + ', Destination: ' + destination + ', Customer: ' + customerNumber);
+  console.log('ParentCallSid: ' + parentCallSid + ', Destination: ' + destination + ', Customer: ' + customerNumber + ', Empresa: ' + empresa);
 
   res.json({
     results: [{ toolCallId: toolCallId, result: 'Transferring now' }]
@@ -186,7 +205,7 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    waitAndRecord(parentCallSid, customerNumber);
+    waitAndRecord(parentCallSid, customerNumber, empresa);
 
   } catch (err) {
     console.error('Error: ' + err.message);
@@ -201,12 +220,13 @@ app.post('/recording-complete', async (req, res) => {
   const callInfo = activeCalls[childCallSid] || {};
   const parentCallSid = callInfo.parentCallSid || 'unknown';
   const customerNumber = callInfo.customerNumber || 'unknown';
+  const empresa = callInfo.empresa || 'indomo';
 
-  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, Parent: ' + parentCallSid + ', Child: ' + childCallSid);
+  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, Parent: ' + parentCallSid + ', Child: ' + childCallSid + ', Empresa: ' + empresa);
   res.sendStatus(200);
 
   try {
-    await transcribeRecording(sid, url, parentCallSid, childCallSid, customerNumber);
+    await transcribeRecording(sid, url, parentCallSid, childCallSid, customerNumber, empresa);
   } catch (err) {
     console.error('Transcription error: ' + err.message);
   }
