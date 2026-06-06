@@ -12,6 +12,8 @@ const deepgramKey = process.env.DEEPGRAM_API_KEY;
 const makeWebhook = 'https://hook.us2.make.com/n27oscm6jtz4ozn8p3nrfjpmbwnnkgtp';
 const client = twilio(accountSid, authToken);
 
+const activeCalls = {};
+
 async function downloadAudio(recordingUrl) {
   const url = new URL(recordingUrl + '.wav');
   const auth = Buffer.from(accountSid + ':' + authToken).toString('base64');
@@ -50,7 +52,7 @@ async function downloadAudio(recordingUrl) {
   });
 }
 
-async function transcribeRecording(recordingSid, recordingUrl, callSid) {
+async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber) {
   console.log('Downloading audio: ' + recordingSid);
   const audioBuffer = await downloadAudio(recordingUrl);
   console.log('Audio downloaded, size: ' + audioBuffer.length + ' bytes');
@@ -75,7 +77,7 @@ async function transcribeRecording(recordingSid, recordingUrl, callSid) {
           const result = JSON.parse(data);
           const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
           console.log('TRANSCRIPT: ' + transcript);
-          sendToMake(callSid, recordingSid, transcript);
+          sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber);
           resolve(transcript);
         } catch (e) {
           reject(e);
@@ -88,9 +90,11 @@ async function transcribeRecording(recordingSid, recordingUrl, callSid) {
   });
 }
 
-function sendToMake(callSid, recordingSid, transcript) {
+function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber) {
   const body = JSON.stringify({
-    callSid: callSid,
+    parentCallSid: parentCallSid,
+    childCallSid: childCallSid,
+    customerNumber: customerNumber,
     recordingSid: recordingSid,
     transcript: transcript
   });
@@ -114,7 +118,7 @@ function sendToMake(callSid, recordingSid, transcript) {
   req.end();
 }
 
-async function waitAndRecord(parentCallSid) {
+async function waitAndRecord(parentCallSid, customerNumber) {
   await new Promise(r => setTimeout(r, 4000));
 
   for (let i = 0; i < 10; i++) {
@@ -124,6 +128,7 @@ async function waitAndRecord(parentCallSid) {
 
       if (active) {
         console.log('Child found: ' + active.sid + ' status: ' + active.status);
+        activeCalls[active.sid] = { parentCallSid, customerNumber };
         await client.calls(active.sid).recordings.create({
           recordingChannels: 'dual',
           recordingStatusCallback: 'https://activate-call-recording-twilio.onrender.com/recording-complete',
@@ -144,12 +149,13 @@ async function waitAndRecord(parentCallSid) {
 
 app.post('/transfer', async (req, res) => {
   const message = req.body.message;
-  const callSid = message.call.transport.callSid;
+  const parentCallSid = message.call.transport.callSid;
   const controlUrl = message.call.monitor.controlUrl;
   const destination = message.toolCallList[0].function.arguments.destination;
   const toolCallId = message.toolCallList[0].id;
+  const customerNumber = message.call.customer.number;
 
-  console.log('CallSid: ' + callSid + ', Destination: ' + destination);
+  console.log('ParentCallSid: ' + parentCallSid + ', Destination: ' + destination + ', Customer: ' + customerNumber);
 
   res.json({
     results: [{ toolCallId: toolCallId, result: 'Transferring now' }]
@@ -180,7 +186,7 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    waitAndRecord(callSid);
+    waitAndRecord(parentCallSid, customerNumber);
 
   } catch (err) {
     console.error('Error: ' + err.message);
@@ -191,12 +197,16 @@ app.post('/recording-complete', async (req, res) => {
   const sid = req.body.RecordingSid;
   const url = req.body.RecordingUrl;
   const duration = req.body.RecordingDuration;
-  const callSid = req.body.CallSid;
-  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's');
+  const childCallSid = req.body.CallSid;
+  const callInfo = activeCalls[childCallSid] || {};
+  const parentCallSid = callInfo.parentCallSid || 'unknown';
+  const customerNumber = callInfo.customerNumber || 'unknown';
+
+  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, Parent: ' + parentCallSid + ', Child: ' + childCallSid);
   res.sendStatus(200);
 
   try {
-    await transcribeRecording(sid, url, callSid);
+    await transcribeRecording(sid, url, parentCallSid, childCallSid, customerNumber);
   } catch (err) {
     console.error('Transcription error: ' + err.message);
   }
