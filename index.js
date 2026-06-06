@@ -9,6 +9,7 @@ app.use(express.json());
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
 const deepgramKey = process.env.DEEPGRAM_API_KEY;
+const makeWebhook = 'https://hook.us2.make.com/n27oscm6jtz4ozn8p3nrfjpmbwnnkgtp';
 const client = twilio(accountSid, authToken);
 
 async function downloadAudio(recordingUrl) {
@@ -49,7 +50,7 @@ async function downloadAudio(recordingUrl) {
   });
 }
 
-async function transcribeRecording(recordingSid, recordingUrl) {
+async function transcribeRecording(recordingSid, recordingUrl, callSid) {
   console.log('Downloading audio: ' + recordingSid);
   const audioBuffer = await downloadAudio(recordingUrl);
   console.log('Audio downloaded, size: ' + audioBuffer.length + ' bytes');
@@ -74,6 +75,7 @@ async function transcribeRecording(recordingSid, recordingUrl) {
           const result = JSON.parse(data);
           const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
           console.log('TRANSCRIPT: ' + transcript);
+          sendToMake(callSid, recordingSid, transcript);
           resolve(transcript);
         } catch (e) {
           reject(e);
@@ -84,6 +86,32 @@ async function transcribeRecording(recordingSid, recordingUrl) {
     req.write(audioBuffer);
     req.end();
   });
+}
+
+function sendToMake(callSid, recordingSid, transcript) {
+  const body = JSON.stringify({
+    callSid: callSid,
+    recordingSid: recordingSid,
+    transcript: transcript
+  });
+
+  const url = new URL(makeWebhook);
+  const options = {
+    hostname: url.hostname,
+    path: url.pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  };
+
+  const req = https.request(options, (res) => {
+    console.log('Make webhook response: ' + res.statusCode);
+  });
+  req.on('error', (e) => console.error('Make error: ' + e.message));
+  req.write(body);
+  req.end();
 }
 
 async function waitAndRecord(parentCallSid) {
@@ -163,11 +191,12 @@ app.post('/recording-complete', async (req, res) => {
   const sid = req.body.RecordingSid;
   const url = req.body.RecordingUrl;
   const duration = req.body.RecordingDuration;
+  const callSid = req.body.CallSid;
   console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's');
   res.sendStatus(200);
 
   try {
-    await transcribeRecording(sid, url);
+    await transcribeRecording(sid, url, callSid);
   } catch (err) {
     console.error('Transcription error: ' + err.message);
   }
