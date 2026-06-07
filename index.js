@@ -164,11 +164,18 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
         return;
       }
 
-      const noAnswer = calls.find(c => c.status === 'no-answer' || c.status === 'busy' || c.status === 'failed');
-      if (noAnswer) {
-        console.log('Child no-answer: ' + noAnswer.sid);
-        sendToMake(parentCallSid, noAnswer.sid, 'no-recording', 'no-answer', customerNumber, empresa);
-        return;
+      const anyChild = calls[0];
+      if (anyChild) {
+        console.log('Child found with status: ' + anyChild.status + ' SID: ' + anyChild.sid);
+        if (anyChild.status === 'no-answer' || anyChild.status === 'busy' || anyChild.status === 'failed') {
+          sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa);
+          return;
+        }
+        if (anyChild.status === 'completed') {
+          console.log('Child already completed, checking recordings...');
+          activeCalls[anyChild.sid] = { parentCallSid, customerNumber, empresa };
+          return;
+        }
       }
 
       console.log('Attempt ' + (i+1) + ': no active child yet, calls found: ' + calls.length);
@@ -178,8 +185,14 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
     }
     await new Promise(r => setTimeout(r, 2000));
   }
-  console.log('Could not find active child call after 10 attempts');
-  sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa);
+
+  const calls = await client.calls.list({ parentCallSid: parentCallSid, limit: 5 }).catch(() => []);
+  const anyChild = calls[0];
+  if (anyChild) {
+    sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa);
+  } else {
+    sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa);
+  }
 }
 
 app.post('/transfer', async (req, res) => {
