@@ -16,7 +16,6 @@ const client = twilio(accountSid, authToken);
 const CLIENT_CONFIG = {
   indomo: 'https://hook.us2.make.com/n27oscm6jtz4ozn8p3nrfjpmbwnnkgtp',
   // empresa2: 'https://hook.us2.make.com/XXXX',
-  // empresa3: 'https://hook.us2.make.com/XXXX',
 };
 // ================================================
 
@@ -83,7 +82,16 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
       res.on('end', () => {
         try {
           const result = JSON.parse(data);
-          const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
+          let transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || 'No transcript';
+
+          const voicemailPhrases = ['buzón', 'buzon', 'no está disponible', 'deja tu mensaje', 'después del tono', 'despues del tono', 'graba tu mensaje', 'puedes colgar', 'no available', 'leave a message'];
+          const isVoicemail = voicemailPhrases.some(phrase => transcript.toLowerCase().includes(phrase));
+
+          if (isVoicemail) {
+            console.log('Voicemail detected, marking as no-answer');
+            transcript = 'no-answer';
+          }
+
           console.log('TRANSCRIPT: ' + transcript);
           sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa);
           resolve(transcript);
@@ -142,8 +150,8 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
   for (let i = 0; i < 10; i++) {
     try {
       const calls = await client.calls.list({ parentCallSid: parentCallSid, limit: 5 });
-      const active = calls.find(c => c.status === 'in-progress');
 
+      const active = calls.find(c => c.status === 'in-progress');
       if (active) {
         console.log('Child found: ' + active.sid + ' status: ' + active.status);
         activeCalls[active.sid] = { parentCallSid, customerNumber, empresa };
@@ -154,15 +162,24 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
         });
         console.log('Recording started for ' + active.sid);
         return;
-      } else {
-        console.log('Attempt ' + (i+1) + ': no active child yet, calls found: ' + calls.length);
       }
+
+      const noAnswer = calls.find(c => c.status === 'no-answer' || c.status === 'busy' || c.status === 'failed');
+      if (noAnswer) {
+        console.log('Child no-answer: ' + noAnswer.sid);
+        sendToMake(parentCallSid, noAnswer.sid, 'no-recording', 'no-answer', customerNumber, empresa);
+        return;
+      }
+
+      console.log('Attempt ' + (i+1) + ': no active child yet, calls found: ' + calls.length);
+
     } catch (err) {
       console.error('Polling error: ' + err.message);
     }
     await new Promise(r => setTimeout(r, 2000));
   }
   console.log('Could not find active child call after 10 attempts');
+  sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa);
 }
 
 app.post('/transfer', async (req, res) => {
