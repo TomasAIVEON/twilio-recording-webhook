@@ -267,7 +267,10 @@ app.post('/child-status', (req, res) => {
   res.sendStatus(200);
 });
 
-app.get('/', (req, res) => res.send('OK'));
+app.get('/', (req, res) => {
+  console.log('Ping recibido: ' + new Date().toISOString());
+  res.send('OK');
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Server running on port ' + PORT));
