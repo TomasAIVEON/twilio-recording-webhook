@@ -20,6 +20,11 @@ const CLIENT_CONFIG = {
 // ================================================
 
 // ================================================
+// NUMERO DE TWILIO AL QUE SE REDIRIGE SI NO CONTESTA EL ASESOR
+const INBOUND_NUMBER = '+16506681570';
+// ================================================
+
+// ================================================
 // MENSAJE CUANDO EL ASESOR NO CONTESTA — CAMBIA AQUI
 const NO_ANSWER_MESSAGE = 'Disculpa, no fue posible transferirte con el asesor en este momento. Pero si gustas, con mucho gusto te puedo agendar una cita para que un asesor te contacte. ¿Te parece?';
 // ================================================
@@ -64,6 +69,17 @@ async function downloadAudio(recordingUrl) {
   });
 }
 
+async function redirectToInbound(parentCallSid) {
+  console.log('Redirecting lead to inbound agent: ' + parentCallSid);
+  try {
+    const twiml = '<Response><Dial>' + INBOUND_NUMBER + '</Dial></Response>';
+    await client.calls(parentCallSid).update({ twiml: twiml });
+    console.log('Lead redirected to inbound agent');
+  } catch (err) {
+    console.error('Error redirecting to inbound: ' + err.message);
+  }
+}
+
 async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber, empresa) {
   console.log('Downloading audio: ' + recordingSid);
   const audioBuffer = await downloadAudio(recordingUrl);
@@ -93,8 +109,9 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
           const isVoicemail = voicemailPhrases.some(phrase => transcript.toLowerCase().includes(phrase));
 
           if (isVoicemail) {
-            console.log('Voicemail detected, marking as no-answer');
+            console.log('Voicemail detected - redirecting lead to inbound agent');
             transcript = 'no-answer';
+            redirectToInbound(parentCallSid);
           }
 
           console.log('TRANSCRIPT: ' + transcript);
@@ -149,34 +166,7 @@ function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, custo
   req.end();
 }
 
-function resumeAgent(controlUrl, message) {
-  console.log('Resuming agent with message: ' + message);
-
-  const body = JSON.stringify({
-    type: 'say',
-    content: message
-  });
-
-  const url = new URL(controlUrl);
-  const options = {
-    hostname: url.hostname,
-    path: url.pathname,
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Content-Length': Buffer.byteLength(body)
-    }
-  };
-
-  const req = https.request(options, (res) => {
-    console.log('Resume agent response: ' + res.statusCode);
-  });
-  req.on('error', (e) => console.error('Resume error: ' + e.message));
-  req.write(body);
-  req.end();
-}
-
-async function waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl) {
+async function waitAndRecord(parentCallSid, customerNumber, empresa) {
   await new Promise(r => setTimeout(r, 4000));
 
   for (let i = 0; i < 10; i++) {
@@ -201,7 +191,7 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl)
         console.log('Child found with status: ' + anyChild.status + ' SID: ' + anyChild.sid);
         if (anyChild.status === 'no-answer' || anyChild.status === 'busy' || anyChild.status === 'failed') {
           sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa);
-          resumeAgent(controlUrl, NO_ANSWER_MESSAGE);
+          redirectToInbound(parentCallSid);
           return;
         }
         if (anyChild.status === 'completed') {
@@ -226,7 +216,7 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl)
   } else {
     sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa);
   }
-  resumeAgent(controlUrl, NO_ANSWER_MESSAGE);
+  redirectToInbound(parentCallSid);
 }
 
 app.post('/transfer', async (req, res) => {
@@ -269,7 +259,7 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl);
+    waitAndRecord(parentCallSid, customerNumber, empresa);
 
   } catch (err) {
     console.error('Error: ' + err.message);
