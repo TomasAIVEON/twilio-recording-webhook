@@ -59,7 +59,7 @@ async function downloadAudio(recordingUrl) {
   });
 }
 
-async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber, empresa, assistantId) {
+async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, childCallSid, customerNumber, empresa, assistantId, callId) {
   console.log('Downloading audio: ' + recordingSid);
   const audioBuffer = await downloadAudio(recordingUrl);
   console.log('Audio downloaded, size: ' + audioBuffer.length + ' bytes');
@@ -93,7 +93,7 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
           }
 
           console.log('TRANSCRIPT: ' + transcript);
-          sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa, assistantId);
+          sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa, assistantId, callId);
           resolve(transcript);
         } catch (e) {
           reject(e);
@@ -106,7 +106,7 @@ async function transcribeRecording(recordingSid, recordingUrl, parentCallSid, ch
   });
 }
 
-function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa, assistantId) {
+function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, customerNumber, empresa, assistantId, callId) {
   const webhookUrl = CLIENT_CONFIG[empresa.toLowerCase()];
 
   if (!webhookUrl) {
@@ -123,7 +123,8 @@ function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, custo
     recordingSid: recordingSid,
     transcript: transcript,
     empresa: empresa,
-    assistantId: assistantId
+    assistantId: assistantId,
+    callId: callId
   });
 
   const url = new URL(webhookUrl);
@@ -145,7 +146,7 @@ function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, custo
   req.end();
 }
 
-async function waitAndRecord(parentCallSid, customerNumber, empresa, assistantId) {
+async function waitAndRecord(parentCallSid, customerNumber, empresa, assistantId, callId) {
   await new Promise(r => setTimeout(r, 4000));
 
   for (let i = 0; i < 10; i++) {
@@ -155,7 +156,7 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa, assistantId
       const active = calls.find(c => c.status === 'in-progress');
       if (active) {
         console.log('Child found: ' + active.sid + ' status: ' + active.status);
-        activeCalls[active.sid] = { parentCallSid, customerNumber, empresa, assistantId };
+        activeCalls[active.sid] = { parentCallSid, customerNumber, empresa, assistantId, callId };
         await client.calls(active.sid).recordings.create({
           recordingChannels: 'dual',
           recordingStatusCallback: 'https://activate-call-recording-twilio.onrender.com/recording-complete',
@@ -169,12 +170,12 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa, assistantId
       if (anyChild) {
         console.log('Child found with status: ' + anyChild.status + ' SID: ' + anyChild.sid);
         if (anyChild.status === 'no-answer' || anyChild.status === 'busy' || anyChild.status === 'failed') {
-          sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa, assistantId);
+          sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa, assistantId, callId);
           return;
         }
         if (anyChild.status === 'completed') {
           console.log('Child already completed, checking recordings...');
-          activeCalls[anyChild.sid] = { parentCallSid, customerNumber, empresa, assistantId };
+          activeCalls[anyChild.sid] = { parentCallSid, customerNumber, empresa, assistantId, callId };
           return;
         }
       }
@@ -190,9 +191,9 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa, assistantId
   const calls = await client.calls.list({ parentCallSid: parentCallSid, limit: 5 }).catch(() => []);
   const anyChild = calls[0];
   if (anyChild) {
-    sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa, assistantId);
+    sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa, assistantId, callId);
   } else {
-    sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa, assistantId);
+    sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa, assistantId, callId);
   }
 }
 
@@ -205,8 +206,9 @@ app.post('/transfer', async (req, res) => {
   const customerNumber = message.call.customer.number;
   const empresa = message.toolCallList[0].function.arguments.empresa || 'indomo';
   const assistantId = message.call.assistantId || message.assistant?.id || 'unknown';
+  const callId = message.call.id || 'unknown';
 
-  console.log('ParentCallSid: ' + parentCallSid + ', Destination: ' + destination + ', Customer: ' + customerNumber + ', Empresa: ' + empresa + ', AssistantId: ' + assistantId);
+  console.log('ParentCallSid: ' + parentCallSid + ', Destination: ' + destination + ', Customer: ' + customerNumber + ', Empresa: ' + empresa + ', AssistantId: ' + assistantId + ', CallId: ' + callId);
 
   res.json({
     results: [{ toolCallId: toolCallId, result: 'Transferring now' }]
@@ -237,7 +239,7 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    waitAndRecord(parentCallSid, customerNumber, empresa, assistantId);
+    waitAndRecord(parentCallSid, customerNumber, empresa, assistantId, callId);
 
   } catch (err) {
     console.error('Error: ' + err.message);
@@ -254,12 +256,13 @@ app.post('/recording-complete', async (req, res) => {
   const customerNumber = callInfo.customerNumber || 'unknown';
   const empresa = callInfo.empresa || 'indomo';
   const assistantId = callInfo.assistantId || 'unknown';
+  const callId = callInfo.callId || 'unknown';
 
-  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, Parent: ' + parentCallSid + ', Child: ' + childCallSid + ', Empresa: ' + empresa + ', AssistantId: ' + assistantId);
+  console.log('Recording ready - SID: ' + sid + ', Duration: ' + duration + 's, Parent: ' + parentCallSid + ', Child: ' + childCallSid + ', Empresa: ' + empresa + ', AssistantId: ' + assistantId + ', CallId: ' + callId);
   res.sendStatus(200);
 
   try {
-    await transcribeRecording(sid, url, parentCallSid, childCallSid, customerNumber, empresa, assistantId);
+    await transcribeRecording(sid, url, parentCallSid, childCallSid, customerNumber, empresa, assistantId, callId);
   } catch (err) {
     console.error('Transcription error: ' + err.message);
   }
