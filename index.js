@@ -19,6 +19,11 @@ const CLIENT_CONFIG = {
 };
 // ================================================
 
+// ================================================
+// MENSAJE CUANDO EL ASESOR NO CONTESTA — CAMBIA AQUI
+const NO_ANSWER_MESSAGE = 'Disculpa, no fue posible transferirte con el asesor en este momento. Pero si gustas, con mucho gusto te puedo agendar una cita para que un asesor te contacte. ¿Te parece?';
+// ================================================
+
 const activeCalls = {};
 
 async function downloadAudio(recordingUrl) {
@@ -144,7 +149,34 @@ function sendToMake(parentCallSid, childCallSid, recordingSid, transcript, custo
   req.end();
 }
 
-async function waitAndRecord(parentCallSid, customerNumber, empresa) {
+function resumeAgent(controlUrl, message) {
+  console.log('Resuming agent with message: ' + message);
+
+  const body = JSON.stringify({
+    type: 'say',
+    content: message
+  });
+
+  const url = new URL(controlUrl);
+  const options = {
+    hostname: url.hostname,
+    path: url.pathname,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body)
+    }
+  };
+
+  const req = https.request(options, (res) => {
+    console.log('Resume agent response: ' + res.statusCode);
+  });
+  req.on('error', (e) => console.error('Resume error: ' + e.message));
+  req.write(body);
+  req.end();
+}
+
+async function waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl) {
   await new Promise(r => setTimeout(r, 4000));
 
   for (let i = 0; i < 10; i++) {
@@ -169,6 +201,7 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
         console.log('Child found with status: ' + anyChild.status + ' SID: ' + anyChild.sid);
         if (anyChild.status === 'no-answer' || anyChild.status === 'busy' || anyChild.status === 'failed') {
           sendToMake(parentCallSid, anyChild.sid, 'no-recording', 'no-answer', customerNumber, empresa);
+          resumeAgent(controlUrl, NO_ANSWER_MESSAGE);
           return;
         }
         if (anyChild.status === 'completed') {
@@ -193,6 +226,7 @@ async function waitAndRecord(parentCallSid, customerNumber, empresa) {
   } else {
     sendToMake(parentCallSid, 'unknown', 'no-recording', 'no-answer', customerNumber, empresa);
   }
+  resumeAgent(controlUrl, NO_ANSWER_MESSAGE);
 }
 
 app.post('/transfer', async (req, res) => {
@@ -235,7 +269,7 @@ app.post('/transfer', async (req, res) => {
     request.write(body);
     request.end();
 
-    waitAndRecord(parentCallSid, customerNumber, empresa);
+    waitAndRecord(parentCallSid, customerNumber, empresa, controlUrl);
 
   } catch (err) {
     console.error('Error: ' + err.message);
@@ -267,10 +301,7 @@ app.post('/child-status', (req, res) => {
   res.sendStatus(200);
 });
 
-app.get('/', (req, res) => {
-  console.log('Ping recibido: ' + new Date().toISOString());
-  res.send('OK');
-});
+app.get('/', (req, res) => res.send('OK'));
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log('Server running on port ' + PORT));
